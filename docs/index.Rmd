@@ -4,6 +4,9 @@ output:
    html_document:
     code_folding: show
     df_print: paged
+    toc: true 
+    toc_float: true
+    theme: journal
 ---
 
 ```{r setup, include=FALSE}
@@ -41,7 +44,7 @@ hinduism <- read_csv("Datasets/QueryResults-Hinduism-9_27_22.csv") %>%
   janitor::clean_names()
 ```
 
-### Data cleaning 
+### Data cleaning
 Anyone with a casual familiarity of Hindu texts would probably ask “where is the _Upanishads_ or the _Bhagavid-gita_- why isn’t the _Mahabharata_ and _Ramayana_ grouped under an equally broad category like history or _Itihasa_?” This is due to the distribution of user tags in the Hinduism Stack Exchange. Where the _Vedas_ and _Mahabharata_ are overrepresented compared to other topics. As the following table shows, the _Mahabharata_ and _Vedas_ capture a considerable amount of data. The _Ramayana_ is a special case, where the work itself isn't referenced as often as the characters in it.
 
 ```{r class.source = 'fold-hide'}
@@ -79,6 +82,7 @@ hinduism %>%
 
 In the interest of capturing as much of the dataset as possible the less prevalent tags were grouped together. This consists of the eighteen _mahapuranas_, and the _Vedas_, while the _Upanishads_, _Bhagavad-gita_, and _Brahma-sutras_ are under the _Vedanta_. The main characters from the _Ramayana_, _Rama_, _Sita_, and _Ravana_, are also grouped together under their respective topic.
 
+#### Brief overview of our topics
 I've included a brief description of our tags as outlined [here](https://www.hinduwebsite.com/hinduism/hinduscriptures.asp):
 
 * The _Mahabharata_ is an epic about two brothers, Pandu and Dhritarashtra, and the "recalcitrant attitude between them for political power which leads to a great war and... destruction of both families."
