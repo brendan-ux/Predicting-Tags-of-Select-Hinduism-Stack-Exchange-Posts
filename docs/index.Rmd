@@ -1,0 +1,389 @@
+---
+title: "Predicting Tags of Select Hinduism Stack Exchange Q&A Posts"
+output:
+   html_document:
+    code_folding: show
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(tidytext)
+library(RColorBrewer)
+library(knitr)
+library(kableExtra)
+knitr::opts_chunk$set(echo = TRUE)
+# set the default theme for our plots
+theme_set(theme_light())
+update_geom_defaults("rect", list(fill = "#CD5C5C", alpha = 0.9))
+```
+
+In this project my aim is to predict the tags of a select corpus of posts from the Hinduism Stack Exchange. Where the user tags have been coalesced into topics relating to primary Hindu scripture, including: _The Mahabharata_, _Ramayana_, _Vedanta_, _Vedas_, and _Puranas_. The Hinduism Stack Exchange describes itself as [“a question and answer site for followers of the Hindu religion and those interested in learning more about Hinduism.”]( https://hinduism.stackexchange.com/) It functions in the same way as other StackExchange forums, with users creating Q&A posts under the supervision of a moderation team that also creates wikis and removes off-topic or illicit content. Stack Exchange users can create their own tags subject to the StackExchange [guidelines]( https://meta.stackexchange.com/help/privileges/create-tags) and any user can include up to 5 different tags in one post. The dataset that we will be working with constitutes about 1/3rd of the Hinduism Stack Exchange’s Q&A posts, with 40,370 unique tags and with more than 85% of the 13,979 posts containing multiple tags.
+
+My motivation here is to practice fitting a generalized linear model (GLM) to text data using tf-idf and to learn a little about the Hindu canon in the process. It also gives me an excuse to use SQL to query our dataset and to use the `tidymodels` package for R.
+
+### Data source and importation 
+The dataset for this project was obtained using the [Stack Exchange Data Explorer](https://data.stackexchange.com/) (SEDE) on September 27, 2022. The benefit of using SEDE over Stack Exchange's publicly available "data dumps" is that SEDE is both updated weekly and allows users to directly query the database using SQL. The SQL query used to obtain this dataset is the following: 
+```
+SELECT *
+FROM Posts p
+WHERE p.PostTypeId = 1
+AND p.ClosedDate IS NULL
+;
+```
+The proceeding code dropped all non-question observations and any closed posts. The latter to avoid inclusion of any off-topic posts that may throw off our analysis.
+
+The dataset was then loaded into R and the column names were changed to a more readable format using `clean_names()` from the `janitor` package.
+
+```{r message=FALSE, warning=FALSE}
+# imported csv and cleaned names
+hinduism <- read_csv("Datasets/QueryResults-Hinduism-9_27_22.csv") %>%
+  janitor::clean_names()
+```
+
+### Data cleaning 
+Anyone with a casual familiarity of Hindu texts would probably ask “where is the _Upanishads_ or the _Bhagavid-gita_- why isn’t the _Mahabharata_ and _Ramayana_ grouped under an equally broad category like history or _Itihasa_?” This is due to the distribution of user tags in the Hinduism Stack Exchange. Where the _Vedas_ and _Mahabharata_ are overrepresented compared to other topics. As the following table shows, the _Mahabharata_ and _Vedas_ capture a considerable amount of data. The _Ramayana_ is a special case, where the work itself isn't referenced as often as the characters in it.
+
+```{r class.source = 'fold-hide'}
+library(formattable)
+
+key_terms <- c("mahabharata", "mahabharat", "ramayana", 
+               "vedanta", "vedas", "puranas", "pandu", "dhritarashtra", "pandavas", 
+               "kauravas", "ramayana", "rama", "ravana", "sita", 
+               "vedanta", "bhagavad-gita", "arjuna", "upanishad",
+               "brahma-sutras","veda","purana")
+
+dev_names <- data.frame(hindi_term = c("वेदस", "महाभारत", "पुराणास", "रामायण", "वेदांत"))
+
+hinduism %>%
+  select(tags) %>%
+  mutate(tags = str_replace_all(tags, "><", ", "),
+    tags = str_remove_all(tags, ">|<")) %>%
+    unnest_regex(each_tag, tags, 
+    pattern = ", ", drop = FALSE) %>%
+  add_count(each_tag, sort = TRUE) %>%
+  select(-tags) %>%
+  unique() %>%
+  mutate(prevalence = scales::percent(n / dim(hinduism)[[1]], accuracy = 0.01),
+    rank = row_number(),
+    count = color_bar("#db8a8a")(n)) %>%
+  select(rank, each_tag:count, -n) %>%
+  filter(each_tag %in% key_terms,
+         rank <= 13) %>%
+  cbind(dev_names) %>%
+  kable("html", escape = FALSE) %>%
+  kable_styling(bootstrap_options = c("bordered", "striped"), 
+    full_width = TRUE) %>%
+  column_spec(4, width = "3cm")
+```
+
+In the interest of capturing as much of the dataset as possible the less prevalent tags were grouped together. This consists of the eighteen _mahapuranas_, and the _Vedas_, while the _Upanishads_, _Bhagavad-gita_, and _Brahma-sutras_ are under the _Vedanta_. The main characters from the _Ramayana_, _Rama_, _Sita_, and _Ravana_, are also grouped together under their respective topic.
+
+I've included a brief description of our tags as outlined [here](https://www.hinduwebsite.com/hinduism/hinduscriptures.asp):
+
+* The _Mahabharata_ is an epic about two brothers, Pandu and Dhritarashtra, and the "recalcitrant attitude between them for political power which leads to a great war and... destruction of both families."
+* In the _Ramayana_, another epic, two characters, Rama prince of Ayodhya city and Ravana, battle each other with Rama ultimately victorious.
+* I've combined the _Prasthanatrayi_ (three axioms), consisting of the _Upanishads_, _Bhagavad Gita_, and _Brahma Sutras_, into the _Vendata_. As a philisophical tradition, the _Vendanta_ draws from these texts and Hinduism Stack Exchange questions are often tagged with both. 
+* _Vedas_ are part of the _Shruti_ (that which is heard) literary canon, and are considered to be of divine origin, they consist of the _Rigveda_, _Yajurveda_, _Samaveda_, and _Atharvaveda_.
+* The _Puranas_ are the encyclopedic collection of Hindu legend and lore, there are 18 main _Puranas_ called the _Mahapurana_ and another 18 secondary called the _Upapurana_.
+
+To complicate this process many of the characters in these texts are referenced in others. Other works like the _Upanishads_ and _Bhagavad-Gita_ are drawn entirely from other texts. 
+
+```{r message=FALSE}
+# coerced the relevant post tags into our five topics
+hindu_topics <-  hinduism %>%
+  mutate(tags = str_replace_all(tags, "><", ", "),
+         tags = str_remove_all(tags, ">|<"),
+         tags = case_when(
+           str_detect(tags, "mahabharat|pandu|dhritarashtra|pandavas|kauravas") ~ "mahabharata",
+           str_detect(tags, "ramayana|rama|ravana|sita") ~ "ramayana",
+           str_detect(tags, "vedanta|bhagavad-gita|arjuna|upanishad|brahma-sutras") ~ "vedanta",
+           str_detect(tags, "veda") ~ "vedas",
+           str_detect(tags, "purana") ~ "puranas",
+           TRUE ~ tags)) %>% 
+  add_count(tags) %>% # a quick way to drop unwanted posts
+  filter(n > 1e3) %>%
+  select(-n)
+```
+
+Next, I cleaned up any HTML in the post bodies and merged them with their titles, in order to better capture the topics. Followed by condensing any extra whitespace that was created during the cleaning process.
+
+```{r}
+tidy_hindu <- hindu_topics %>%
+  mutate(text = str_replace_all(body, c("<.*?>" = "", "\\n" = " ", 
+    "&quot;" = "", "&amp;" = "and", '\\\"' = "")),
+    text = paste(title, text, sep = " "), # merged title with post body
+    text = str_squish(text))
+```
+
+### Preprocessing and Feature Engineering
+The data was divided in a 80/20 split between training and testing, numeric data were removed for variable importance testing later on. Note: the performance difference between the inclusion of numeric data was negligible when tested.
+
+This was followed by the creation of 10 V-fold cross-validation random splits using `vfold_cv()`, resampled from our training set. 
+
+```{r message=FALSE}
+library(tidymodels)
+set.seed(1234)
+hindu_split <- tidy_hindu %>%
+  mutate(text = str_remove_all(text, "[:digit:]")) %>%
+  initial_split(strata = tags)
+# created test and training sets
+hindu_test <- testing(hindu_split)
+hindu_train <- training(hindu_split)
+
+# 10-fold cross validation
+hindu_folds <- vfold_cv(hindu_train)
+
+```
+
+I also need to determine if our training data is unbalanced and would require possible downsampling.
+
+```{r class.source = 'fold-hide', fig.align='center'}
+hindu_train %>%
+  count(tags, sort = TRUE) %>%
+  ggplot(aes(fct_reorder(tags, n), n)) +
+  geom_col(show.legend = FALSE) +
+  labs(title = "Frequency Count of Hindu Stack Exchange Scripture Tags", 
+       x = "Tags", y = "Frequency Count of Tags")
+```
+
+The plot above shows our data is unbalanced, we'll alleviate this by downsampling our training data using `step_downsample()` in our model recipe below.
+
+Now I can specify the feature engineering recipe using the `textrecipes` package. Where I tokenize the post text and removed English stopwords using the `NLTK` package. Followed by setting a tune-able `max_tokens` parameter to maximize model performance given limited RAM, as demonstrated in [_Supervised Machine Learning for Text Analysis in R_](https://smltar.com/embeddings.html#motivatingsparse).
+
+After that I use `step_tfidf()` to calculate variable importance for our new textfeatures by taking the _term frequency (tf)_ and multiplying it by the _inverse document frequency (idf)_ written as
+
+$$idf(term) = ln(\frac{n_{documents}}{n_{documents\hspace{.5em}containing\hspace{.5em}term}})$$
+
+This means that common, unimportant, words will approach zero as their frequency increases. This will be useful later on when casting to a sparse matrix for feature reduction to improve computation time.
+
+```{r}
+library(textrecipes)
+hindu_rec <- recipe(tags ~ text, data = hindu_train) %>%
+  step_tokenize(text) %>%
+  step_stopwords(text, stopword_source = "nltk", language = "english") %>%
+  step_tokenfilter(text, max_tokens = tune()) %>%
+  step_tfidf(text) %>%
+  themis::step_downsample(tags)
+
+hindu_rec
+```
+
+In this step we specify a multinomial regression model using the `multinom_reg()` function included in the `tidymodels` package. We set the computational engine to use `glmnet` and specify a pure Lasso model by setting `mixture = 1`. The lasso regularized model uses a regularization method that also performs variable selection. It does this by determining how much of a _penalty_, denoted by λ, to apply to our features (sometimes going all the way to zero). This means that our high-dimensional feature space can be condensed down to a select group of important variables.
+
+```{r}
+# mixture 1 specifies a pure lasso model
+multi_spec <- multinom_reg(penalty = tune(), mixture = 1) %>%
+  set_mode("classification") %>%
+  set_engine("glmnet")
+
+multi_spec
+```
+
+We now use the `hardhat` package to specify a `blueprint` to cast our data to a _sparse matrix_, in order to take advantage of the innate sparsity of our data. A sparse matrix is, as the name implies, a matrix where most elements are zero, as most documents (in this case Q&A posts) do not contain most words. This is intended to improve computation time for our model- as sparse matrices drop the zero values in our data.  An added benefit of using `glmnet` for our model is its ability to handle sparse input-matrices and, as described [here](https://glmnet.stanford.edu/articles/glmnet.html#introduction-1), at its core “is a set of Fortran subroutines, which make for very fast execution.”
+
+```{r}
+sparse_bp <- hardhat::default_recipe_blueprint(composition = "dgCMatrix")
+```
+
+Here we specify a _model workflow_ that allows us to easily bundle our preprocessor and model specification together. This will come in handy later on when we go to pass our preprocessor on to `tune_grid()` for determining our tuning parameters to optimize our performance metrics (e.g. accuracy or specificity). Plus making it easier to modify our workflow in the future and for fitting our testing data.
+
+```{r}
+hindu_wf <- workflow() %>%
+  add_recipe(hindu_rec, blueprint = sparse_bp) %>%
+  add_model(multi_spec)
+
+hindu_wf
+```
+
+Here we construct a regular grid of tuning parameters- we narrow the range of penalty values down from the default (10, 0), and we set the range of `max_tokens` to tune for.
+
+```{r}
+hindu_grid <- grid_regular(
+  penalty(range = c(-5, 0)),
+  max_tokens(range = c(1e3, 3e3)),
+  levels = c(penalty = 20, max_tokens = 3)
+)
+```
+
+### Model fitting and optimization
+Finally, we fit our model across our crossfold resamples and collect relevant metrics for evaluation and final fit.
+
+```{r}
+set.seed(123)
+doParallel::registerDoParallel()
+tune_rs <- tune_grid(
+  hindu_wf,
+  hindu_folds,
+  grid = hindu_grid,
+  metrics = metric_set(accuracy, sensitivity, specificity)
+)
+```
+
+From the `tune_grid()` function above, we computed the metrics for each crossfold resample and will now select the optimal penalty for our model. It selected a penalty of 0.0144 with `max_tokens` of 2,000, which we will move on with to final fit
+
+```{r}
+choose_acc <- tune_rs %>%
+  select_by_pct_loss(metric = "accuracy", -penalty)
+```
+
+### Finalized `workflow()` and metrics
+Now that we have our optimal penalty selected let’s finalize our workflow and fit it to our testing data. We’ll then collect our performance metrics with the aptly named `collect_metrics()` function.
+
+```{r}
+final_wf <- finalize_workflow(hindu_wf, choose_acc)
+
+final_fitted <- last_fit(final_wf, hindu_split)
+
+collect_metrics(final_fitted)
+```
+
+Let’s see how well our model was able to predict class tags by plotting some confusion matrices using `conf_mat()`. This function tabulates our model’s erroneous predictions for use plotting into an easily interpretable matrix.
+
+```{r class.source = 'fold-hide', fig.align='center', fig.width=10, fig.height=4}
+p1 <- collect_predictions(final_fitted) %>%
+  conf_mat(truth = tags, estimate = .pred_class) %>%
+  autoplot(type = "heatmap") +
+  labs(title = "Predicted vs True")
+
+p2 <- collect_predictions(final_fitted) %>%
+  filter(.pred_class != tags) %>%
+  conf_mat(tags, .pred_class) %>%
+  autoplot(type = "heatmap") +
+  scale_y_discrete(position = "right") +
+  labs(title = "Correct Predictions Removed")
+
+cowplot::plot_grid(p1, p2, ncol = 2, label_x = "Truth", label_y = "Prediction") 
+```
+
+The diagonal line on the left side is well populated, this means that our model _generally_ predicted the correct tag for each class. While the off-diagonal numbers indicate where our model misclassified data. The right-hand plot omits the correct predictions, in order to better visualize where our model breaks down. As mentioned earlier, the nebulous distinction between the _Vedanta_ and _Vedas_ led to an expected degree of confusion. However, this is not the greatest source of model inaccuracy- the _Puranas_ seems to have been misclassified more often than the others.
+
+Now let's plot the ROC AUC (area under the receiver operator characteristic curve) for each class in our model.
+
+```{r fig.align='center', class.source = 'fold-hide', fig.width=8}
+collect_predictions(final_fitted) %>%
+  roc_curve(truth = tags, c(.pred_mahabharata:.pred_vedas)) %>%
+  ggplot(aes(1 - specificity, sensitivity, color = .level)) +
+  geom_abline(slope = 1, color = "gray80", lty = 2, alpha = 0.8) +
+  geom_path(size = 1.5, alpha = 0.7) +
+  scale_color_brewer(palette = "Reds") +
+# theme(text = element_text(family = "Noto Sans", size = 24)) +
+  labs(color = NULL) +
+  coord_fixed()
+```
+
+The ROC curve plots the true positive rate against false positives, with an AUC closer to 1 indicating a well performing model and an AUC closer to 0.5 (represented by the dashed line) indicating the model does no better than guessing. In this case, we see that each class prediction did more or less the same, achieving an average ROC AUC of 0.95. It confirms what we learned from our confusion matrix earlier, that _Vendata_ is more susceptible to misprediction than the others. But, otherwise, the classes move together through the different thresholds.
+
+### Examination of Puranas posts
+
+In the previous section we determined that our predictive model seemed to have the most trouble predicting _Puranas_ posts. Let's now look deeper into this topic to see if any cause is apparent.
+
+```{r class.source = 'fold-hide'}
+hindu_bind <- collect_predictions(final_fitted) %>%
+  bind_cols(hindu_test %>% select(-tags, -id))
+
+hindu_bind %>%
+  filter(.pred_class != tags,
+         tags == "puranas",
+         str_length(text) <= 300) %>%
+  select(.pred_class, tags, text) %>%
+  slice_tail(n = 3) %>%
+  kable("html") %>%
+  kable_styling(bootstrap_options = c("bordered", "striped"), 
+                full_width = TRUE)
+```
+
+From the table above we can see some misclassified posts from `final_fitted` (our final model). These posts are particularly interesting, because they contain direct references to their actual class and are still misclassified. However, they also contain key words for our other classes, some these features may be more important.
+
+Let's examine the _Puranas_ posts a little more by calculating the most prominent words using log odds and plotting them below. We calculate these using `log_odds()` from the `tidylo` package. This method is used because it can determine important words across [different groups](https://juliasilge.github.io/tidylo/articles/tidylo.html), this is opposed to _tf-idf_ which can only determine variable importance for the entire text.
+
+```{r fig.align='center', fig.height=4, fig.width=9, message=FALSE, warning=FALSE, class.source='fold-hide'}
+library(tidylo)
+library(showtext)
+
+font_add_google("Noto Sans")
+showtext_auto()
+
+topic_log_odds1 <- hindu_bind %>%
+  tidytext::unnest_tokens(word, text) %>%
+  anti_join(get_stopwords()) %>%
+  count(tags, word, sort = TRUE) %>%
+  bind_log_odds(tags, word, n)
+
+o1 <- topic_log_odds1 %>%
+  filter(tags == "puranas") %>%
+  slice_max(log_odds_weighted, n = 5) %>%
+  ungroup() %>%
+  ggplot(aes(log_odds_weighted, fct_reorder(word, log_odds_weighted),
+             fill = tags)) +
+  geom_point(show.legend = FALSE) +
+  theme(text = element_text(family = "Noto Sans", size = 24)) +
+  labs(title = paste0("Top words for Puranas posts", "\n(all observations)"), 
+       x = "Log odds (weighted)", y = NULL) 
+
+topic_log_odds2 <- hindu_bind %>%
+  filter(tags != .pred_class) %>%
+  tidytext::unnest_tokens(word, text) %>%
+  anti_join(get_stopwords()) %>%
+  count(tags, word, sort = TRUE) %>%
+  bind_log_odds(tags, word, n)
+
+o2 <- topic_log_odds2 %>%
+  filter(tags == "puranas") %>%
+  slice_max(log_odds_weighted, n = 5) %>%
+  ungroup() %>%
+  ggplot(aes(log_odds_weighted, 
+    fct_reorder(word, log_odds_weighted),
+    fill = tags)) +
+  geom_point(show.legend = FALSE) +
+  theme(text = element_text(family = "Noto Sans", size = 24)) +
+  labs(title = "\nTop words for mispredicted Puranas posts", 
+       x = "Log odds (weighted)", y = NULL) 
+
+cowplot::plot_grid(o1, o2)
+```
+
+The lefthand plot shows the top five words for _Puranas_ Q&A posts; we can see that most of these refer directly to the class. The other variable, _kalpas_, is a measurement of time referenced in the _Vishnu_ and _Bhagavata-Puranas_. On the right are the top words in _Puranas_ posts that were misclassified by our model. Here the top terms are much more diverse, with _Sesha_ being a demigod and _Varaha_ an avatar of the Hindu god _Vishnu_. The other terms are a little stranger, referring to food and _Cain_ from the _Book of Genesis_ in the Judeo-Christian Bible. This post is also very interesting, since it too was misclassified and contains references to other topics. 
+
+```{r class.source = 'fold-hide'}
+hindu_bind %>%
+  filter(str_detect(title, "Cain")) %>%
+  select(.pred_class, tags, text) %>%
+  kable("html") %>%
+  kable_styling(bootstrap_options = c("bordered", "striped"), 
+                full_width = TRUE)
+```
+
+As we can see in the table above, the last sentence alone has references to literally every other classifier as well as its own.
+
+### Model Variable Importance
+
+To wrap things up, let's use the `vip` package to determine our variable importance for our corpus of Q&A posts and plot the top 10 most important features.
+
+```{r class.source = 'fold-hide', message=FALSE, warning=FALSE, fig.align='center'}
+library(vip)
+hindu_imp <- extract_fit_parsnip(final_fitted$.workflow[[1]]) %>%
+  vi(lambda = choose_acc$penalty)
+
+hindu_imp %>%
+  mutate(Variable = str_remove_all(Variable, "tfidf_text_")) %>%
+  filter(Importance > 1e-3) %>%
+  top_n(10, Importance) %>%
+  filter(Sign == "POS") %>%
+  ungroup %>%
+  ggplot(aes(x = Importance,
+    y = fct_reorder(Variable, Importance))) +
+  geom_col(show.legend = FALSE) +
+  theme(text = element_text(family = "Noto Sans", size = 24)) +
+  labs(title = "Variable Importance in Predicting Hinduism Stack Exchange Classes",
+       subtitle = "the following classes are all references to the Mahabharata",
+       y = NULL)
+```
+
+### Conclusion
+
+Altogether, our model has _generally_ shown robust performance and we have explored the area where it most frequently failed. I believe that, due to downsampling after `step_tfidf()` in our preprocessing recipe, we have unintentionally weighted our model towards terms from the _Mahabharata_ above the others- as it contains the largest number of documents of all our classifiers. Otherwise, any issues arising in our model is likely due to the way in which tags were coalesced into broader topics. There is considerable diversity in the topics touched on in these posts and this is reflected in their tags. In many instances, references to Hindu scripture is only very tangentially related to the topic at hand. These sorts of post can have multiple other tags with varying levels of specificity that, if included, would provide a much clearer picture. Though, this could _also_ throw our predictive model off, as the inclusion of more classifiers generally [lowers model performance]( https://smltar.com/mlclassification.html#mlmulticlass).
+
+This project was meant as an exercise in predictive modelling using `glmnet` and Natural Language Processing (NLP). As a result, I didn’t explore additive features, for instance I could’ve created dummy variables for different days of the week or normalized post scores using a `step_YeoJohnson()` function. Nor did I include any other classification models (or even a null model) to test for baseline performance. There were also different NLP components I didn’t touch on, the most apparent to me being word stemming. I had tested stemming and found it to have no real impact. 
+
+In the end, this was an exercise in working with an interesting dataset that required me to learn about Hindu literature as well as practice supervised machine learning with text data.
