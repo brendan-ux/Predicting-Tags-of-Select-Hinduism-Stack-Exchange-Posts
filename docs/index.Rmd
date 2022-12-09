@@ -7,6 +7,8 @@ output:
     toc: true 
     toc_float: true
     theme: journal
+    tufte::tufte_handout: default
+    tufte::tufte_html: default
 ---
 
 ```{r setup, include=FALSE}
@@ -21,7 +23,14 @@ theme_set(theme_light())
 update_geom_defaults("rect", list(fill = "#CD5C5C", alpha = 0.9))
 ```
 
-In this project my aim is to predict the tags of a select corpus of posts from the Hinduism Stack Exchange. Where the user tags have been coalesced into topics relating to primary Hindu scripture, including: _The Mahabharata_, _Ramayana_, _Vedanta_, _Vedas_, and _Puranas_. The Hinduism Stack Exchange describes itself as [“a question and answer site for followers of the Hindu religion and those interested in learning more about Hinduism.”]( https://hinduism.stackexchange.com/) It functions in the same way as other StackExchange forums, with users creating Q&A posts under the supervision of a moderation team that also creates wikis and removes off-topic or illicit content. Stack Exchange users can create their own tags subject to the StackExchange [guidelines]( https://meta.stackexchange.com/help/privileges/create-tags) and any user can include up to 5 different tags in one post. The dataset that we will be working with constitutes about 1/3rd of the Hinduism Stack Exchange’s Q&A posts, with 40,370 unique tags and with more than 85% of the 13,979 posts containing multiple tags.
+
+> _हमारे शब्द हमारे स्वभाव, हम किस प्रकार के व्यक्ति हैं और हमारे सोचने के तरीके को प्रदर्शित  करत_
+>
+> _Our words exhibit our nature, the type of person we are and the way we think._
+>
+> `r tufte::quote_footer('Samaveda')`
+
+In this project my aim is to predict the tags of a select corpus of posts from the Hinduism Stack Exchange. Where the user tags have been coalesced into topics relating to primary Hindu scripture, these include: _The Mahabharata_, _Ramayana_, _Vedanta_, _Vedas_, and _Puranas_. The Hinduism Stack Exchange describes itself as [“a question and answer site for followers of the Hindu religion and those interested in learning more about Hinduism.”]( https://hinduism.stackexchange.com/) It functions in the same way as other StackExchange message boards, with users creating Q&A posts under the supervision of a moderation team that also creates wikis and removes off-topic or illicit content. Stack Exchange users can create their own tags subject to the StackExchange [guidelines]( https://meta.stackexchange.com/help/privileges/create-tags) and any user can include up to 5 different tags in one post. The dataset that we will be working with constitutes about 1/3rd of the overall Hinduism Stack Exchange’s Q&A posts, with 40,370 unique tags and with more than 85% of the 13,979 posts containing multiple tags.
 
 My motivation here is to practice fitting a generalized linear model (GLM) to text data using tf-idf and to learn a little about the Hindu canon in the process. It also gives me an excuse to use SQL to query our dataset and to use the `tidymodels` package for R.
 
@@ -388,6 +397,4 @@ hindu_imp %>%
 
 Altogether, our model has _generally_ shown robust performance and we have explored the area where it most frequently failed. I believe that, due to downsampling after `step_tfidf()` in our preprocessing recipe, we have unintentionally weighted our model towards terms from the _Mahabharata_ above the others- as it contains the largest number of documents of all our classifiers. Otherwise, any issues arising in our model is likely due to the way in which tags were coalesced into broader topics. There is considerable diversity in the topics touched on in these posts and this is reflected in their tags. In many instances, references to Hindu scripture is only very tangentially related to the topic at hand. These sorts of post can have multiple other tags with varying levels of specificity that, if included, would provide a much clearer picture. Though, this could _also_ throw our predictive model off, as the inclusion of more classifiers generally [lowers model performance]( https://smltar.com/mlclassification.html#mlmulticlass).
 
-This project was meant as an exercise in predictive modelling using `glmnet` and Natural Language Processing (NLP). As a result, I didn’t explore additive features, for instance I could’ve created dummy variables for different days of the week or normalized post scores using a `step_YeoJohnson()` function. Nor did I include any other classification models (or even a null model) to test for baseline performance. There were also different NLP components I didn’t touch on, the most apparent to me being word stemming. I had tested stemming and found it to have no real impact. 
-
-In the end, this was an exercise in working with an interesting dataset that required me to learn about Hindu literature as well as practice supervised machine learning with text data.
+To reiterate my statement of purpose- My desire in working on this project was as an exercise in building a predictive model and as an introduction to Natural Language Processing. As a result, I didn’t explore additive features, for instance I could’ve created dummy variables for different days of the week or normalized post scores using a `step_YeoJohnson()` function. Nor did I include any other classification models (or even a null model) to test for baseline performance. Though, beyond this, I now have a categorical model to apply to future data. Where I can use it to parse datasets for particular scripture related posts. Thus, improving over the nebulous nature of StackExchange’s usertags and allowing for a more accurate query of Hindu scripture.
